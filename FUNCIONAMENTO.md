@@ -337,7 +337,19 @@ Os caminhos vêm de `paths.py`. Os arquivos distribuídos (pesos, firmware, mode
 | `gui.py` | `MainWindow`, `VideoView`, `NpuInputView`, `ConfidenceBars`, `CalibrationPanel`, `BackendThread` |
 | `export_weights.py` | `calibrate`: gera `weights.npz` a partir de `models/cnn_pretrained.pth` |
 
-## 13. Limitações conhecidas
+## 13. Resumo
+
+1. O MediaPipe faz o tracking da mão, extraindo 21 pontos 3D.
+2. Esses pontos mapeiam o esqueleto da mão (dedos, articulações e palma).
+3. As coordenadas XY da ponta do dedo indicador passam por um filtro One Euro, que atua como um passa-baixas com frequência de corte dinâmica: corta o tremor quando o dedo está devagar/parado e remove o atraso quando o dedo se move rápido.
+4. Usando as coordenadas 3D, o sistema calcula o ângulo de dobra das articulações de cada dedo. Se a dobra for menor que 45°, o dedo está esticado (com histerese até 65° para voltar a dobrar).
+5. Se nenhum dedo estiver esticado, o gesto é "punho fechado".
+6. Se o indicador estiver esticado e o médio dobrado, o gesto é "desenhar".
+7. Qualquer outra combinação vira "mover" (desloca o cursor sem riscar).
+8. Durante o desenho, a posição filtrada do indicador é salva frame a frame como uma lista de coordenadas vetoriais (ignorando tremores muito curtos ou saltos espúrios).
+9. O OpenCV desenha esses vetores em uma matriz, aplica uma espessura proporcional, recorta, escala para 20x20 e centraliza em 28x28. Essa matriz bruta é quantizada para valores inteiros (int8) e transmitida via serial (UART) para a FPGA fazer a inferência.  
+
+## 14. Limitações conhecidas
 
 - **Traços parados:** num dígito de dois traços, se a mão ficar parada mais de 0,8 s entre um traço e outro, sai uma inferência final do traço incompleto antes da verdadeira. Aumentar `--idle` (ex.: 1,2) evita isso.
 - **Gesto de desenhar:** só depende do indicador e do médio. Indicador + mínimo também desenha.
