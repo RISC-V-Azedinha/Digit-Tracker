@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--camera", type=int, default=0, help="índice da câmera (padrão: 0)")
     parser.add_argument("--weights", default=os.path.join(HERE, "weights.npz"))
-    parser.add_argument("--firmware", default=os.path.join(HERE, "..", "GUI-TCC", "artifacts", "cnn_server.bin"))
+    parser.add_argument("--firmware", default=os.path.join(HERE, "firmware", "cnn_server.bin"))
     parser.add_argument("--input", choices=("mao", "cor"), default="mao",
                         help="mao: desenha com o dedo indicador; cor: bastão colorido (padrão: mao)")
     parser.add_argument("--model", default=os.path.join(HERE, "models", "hand_landmarker.task"),
