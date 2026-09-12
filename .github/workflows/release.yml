@@ -1,0 +1,67 @@
+name: Release (Windows .exe)
+
+# Publica uma release ao enviar uma tag de versão:
+#   git tag v1.0.0 && git push origin v1.0.0
+# Execução manual (workflow_dispatch) só gera o .zip como artifact da run, sem release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-windows.txt
+
+      # O MediaPipe vai com --no-deps: ele declara o opencv-contrib-python, cujos plugins Qt
+      # quebram o PyQt5. As dependências de que ele precisa estão no requirements-windows.txt.
+      - name: Instala dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-windows.txt
+          pip install --no-deps mediapipe==1.0.1
+
+      - name: Gera o executável (PyInstaller)
+        run: pyinstaller Eureka.spec --noconfirm --workpath build/pyinstaller --distpath dist
+
+      - name: Teste de fumaça do executável (abre, carrega o MediaPipe, infere e fecha)
+        shell: pwsh
+        run: |
+          $exe = "dist/Eureka/Eureka.exe"
+          $log = "dist/Eureka/selftest.log"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -PassThru
+          $null = $p.Handle  # garante o ExitCode depois do WaitForExit
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "O executável não fechou em 180 s" }
+          if (Test-Path $log) { Get-Content $log; Remove-Item $log } else { "selftest.log não foi gerado" }
+          if ($p.ExitCode -ne 0) { throw "O teste de fumaça falhou (código $($p.ExitCode))" }
+
+      - name: Empacota
+        shell: pwsh
+        run: |
+          # Atalho para usar sem a placa (o .exe não tem console para receber argumentos)
+          Set-Content -Path dist/Eureka/Eureka-sim.bat -Encoding ascii -Value "@start `"`" `"%~dp0Eureka.exe`" --sim %*"
+          Compress-Archive -Path dist/Eureka -DestinationPath Eureka-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Eureka-windows-x64
+          path: Eureka-windows-x64.zip
+
+      - name: Publica a release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" Eureka-windows-x64.zip \
+            --title "Eureka $GITHUB_REF_NAME" --generate-notes

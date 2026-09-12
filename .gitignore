@@ -1,3 +1,11 @@
 .venv/
 __pycache__/
 calibration.json
+
+# MNIST baixado por export_weights.py
+data/
+
+# Saídas do PyInstaller (executável) e do teste de fumaça (python eureka.py --selftest)
+build/
+dist/
+selftest.log
