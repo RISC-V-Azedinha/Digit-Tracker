@@ -7,6 +7,8 @@ câmera (até 1280x720) → mão (MediaPipe) ou cor (HSV) → traços → recort
       → UART (921600 baud) → NPU: Conv2D 3x3 + ReLU → Fully Connected → 10 logits → previsão
 ```
 
+Para o funcionamento interno em detalhes (threads, rastreio, pré-processamento, protocolo serial e desempenho), veja [`FUNCIONAMENTO.md`](FUNCIONAMENTO.md).
+
 A placa usa o mesmo firmware (`GUI-TCC/artifacts/cnn_server.bin`), o mesmo protocolo serial e os mesmos pesos int8 do experimento 7. Por padrão, a inferência roda **na FPGA**. Com `--sim`, a NPU é emulada no computador com a mesma aritmética inteira, para testar sem a placa.
 
 ## Gestos
