@@ -123,7 +123,7 @@ class VideoView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(640, 360)
+        self.setMinimumSize(640, 300)
         self.setCursor(Qt.CrossCursor)
         self.snap = None
         self._image = None
@@ -379,6 +379,125 @@ class CalibrationPanel(QFrame):
             self.changed.emit(values[:3], values[3:])
 
 
+class PipelineStrip(QWidget):
+    """Faixa que mostra onde cada etapa roda: desenho no HOST (computador) e inferência na FPGA."""
+    HOST_STAGES = ("câmera", "rastreio da mão", "desenho", "imagem 28×28")
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(66)
+        self.fpga = True
+        self.tracking = self.drawing = self.has_image = False
+        self.flash = 0.0      # acende a cada inferência e apaga aos poucos
+        self.digit = None
+        self.latency = None
+
+    def set_backend(self, is_fpga):
+        self.fpga = is_fpga
+        self.update()
+
+    def set_state(self, tracking, drawing, has_image):
+        state = (tracking, drawing, has_image)
+        if state != (self.tracking, self.drawing, self.has_image):
+            self.tracking, self.drawing, self.has_image = state
+            self.update()
+
+    def pulse(self, digit, latency_ms):
+        self.digit, self.latency, self.flash = digit, latency_ms, 1.0
+        self.update()
+
+    def tick(self):
+        if self.flash > 0:
+            self.flash = max(0.0, self.flash - 0.06)
+            self.update()
+
+    def _font(self, px, bold=False):
+        font = self.font()
+        font.setPixelSize(px)
+        font.setBold(bold)
+        return font
+
+    def _zone(self, p, rect, color, title, subtitle):
+        fill = QColor(color)
+        fill.setAlpha(16)
+        border = QColor(color)
+        border.setAlpha(170)
+        p.setPen(QPen(border, 1))
+        p.setBrush(fill)
+        p.drawRoundedRect(rect, 4, 4)
+        p.setFont(self._font(11, bold=True))
+        p.setPen(color)
+        p.drawText(QPointF(rect.left() + 10, rect.top() + 16), title)
+        x = rect.left() + 10 + p.fontMetrics().horizontalAdvance(title) + 10
+        p.setFont(self._font(11))
+        p.setPen(QColor(MUTED))
+        p.drawText(QPointF(x, rect.top() + 16), subtitle)
+
+    def _stages(self, p, rect, names, active, color):
+        gap = 20
+        width = (rect.width() - gap * (len(names) - 1)) / len(names)
+        p.setFont(self._font(11, bold=True))
+        for i, (name, on) in enumerate(zip(names, active)):
+            box = QRectF(rect.left() + i * (width + gap), rect.top(), width, rect.height())
+            fill = QColor(color)
+            fill.setAlpha(70)
+            p.setPen(QPen(QColor(color) if on else QColor(BORDER), 1))
+            p.setBrush(fill if on else QColor(ELEMENT))
+            p.drawRoundedRect(box, 3, 3)
+            p.setPen(QColor(TEXT) if on else QColor(MUTED))
+            p.drawText(box, Qt.AlignCenter, p.fontMetrics().elidedText(name, Qt.ElideRight, int(width) - 8))
+            if i < len(names) - 1:
+                self._arrow(p, box.right() + 4, box.right() + gap - 4, box.center().y(), QColor(MUTED))
+
+    def _arrow(self, p, x0, x1, y, color):
+        p.setPen(QPen(color, 1.5))
+        p.drawLine(QPointF(x0, y), QPointF(x1, y))
+        tip = 1 if x1 > x0 else -1
+        p.drawLine(QPointF(x1, y), QPointF(x1 - 5 * tip, y - 4))
+        p.drawLine(QPointF(x1, y), QPointF(x1 - 5 * tip, y + 4))
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        link_w = 150
+        host_w = int((w - link_w) * 0.58)
+        fpga_x, fpga_w = host_w + link_w, w - host_w - link_w
+        hw = QColor(ORANGE if self.fpga else MUSTARD)
+
+        # HOST: tudo que roda no computador
+        self._zone(p, QRectF(0.5, 0.5, host_w, h - 1), QColor(TEAL), "HOST · COMPUTADOR", "câmera, rastreio e desenho")
+        self._stages(p, QRectF(10, 26, host_w - 20, 30), self.HOST_STAGES,
+                     (True, self.tracking, self.drawing, self.has_image), QColor(TEAL))
+
+        # FPGA: a inferência da CNN
+        latency = f"  ·  {self.latency:.1f} ms" if self.latency is not None else ""
+        if self.fpga:
+            title, subtitle = "FPGA · SoC RISC-V", f"inferência da CNN na NPU{latency}"
+        else:
+            title, subtitle = "NPU EMULADA · COMPUTADOR", f"sem placa (--sim){latency}"
+        self._zone(p, QRectF(fpga_x, 0.5, fpga_w - 1, h - 1), hw, title, subtitle)
+        digit = "?" if self.digit is None else str(self.digit)
+        self._stages(p, QRectF(fpga_x + 10, 26, fpga_w - 20, 30), ("NPU: Conv2D → ReLU → FC", f"logits → {digit}"),
+                     (self.flash > 0, self.flash > 0), hw)
+
+        # Link entre os dois: TX (imagem) e RX (logits), acendem a cada inferência
+        on = QColor(hw)
+        on.setAlphaF(0.35 + 0.65 * self.flash)
+        color = on if self.flash > 0 else QColor(BORDER)
+        x0, x1 = host_w + 12, fpga_x - 12
+        p.setFont(self._font(10, bold=True))
+        p.setPen(QColor(MUTED))
+        p.drawText(QRectF(x0, 0, x1 - x0, 14), Qt.AlignCenter, "UART 921600" if self.fpga else "memória")
+        tx_y, rx_y = h * 0.52, h * 0.86
+        self._arrow(p, x0, x1, tx_y, color)
+        self._arrow(p, x1, x0, rx_y, color)
+        p.setFont(self._font(10))
+        p.setPen(QColor(TEXT) if self.flash > 0 else QColor(MUTED))
+        p.drawText(QRectF(x0, tx_y - 15, x1 - x0, 12), Qt.AlignCenter, "TX  785 B  →")
+        p.drawText(QRectF(x0, rx_y - 15, x1 - x0, 12), Qt.AlignCenter, "←  RX  10 B")
+
+
 # ------------------------------------------------------------------ janela
 class MainWindow(QMainWindow):
     TELEMETRY = ("Backend", "Latência NPU", "Inferências", "UART TX", "UART RX", "Câmera", "Processamento")
@@ -393,6 +512,7 @@ class MainWindow(QMainWindow):
         self._pen_enabled = None
         self._last_error = ""
         self.cam_text = "--"
+        self._hw_where = "na NPU da FPGA"  # onde a inferência roda (muda para a emulação com --sim)
 
         self.setWindowTitle("Eureka — Air-Draw Neural Inference")
         self.setStyleSheet(STYLESHEET)
@@ -402,9 +522,14 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.addWidget(self._build_header(link_text))
+        self.strip = PipelineStrip()
+        strip_row = QHBoxLayout()
+        strip_row.setContentsMargins(24, 14, 24, 0)
+        strip_row.addWidget(self.strip)
+        outer.addLayout(strip_row)
 
         body = QHBoxLayout()
-        body.setContentsMargins(24, 16, 24, 16)
+        body.setContentsMargins(24, 12, 24, 16)
         body.setSpacing(24)
         body.addLayout(self._build_left(), 1)
         body.addWidget(self._build_right())
@@ -522,7 +647,7 @@ class MainWindow(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(300)
-        self.log_view.setFixedHeight(130)
+        self.log_view.setFixedHeight(112)
         left.addWidget(self.log_view)
         return left
 
@@ -530,10 +655,11 @@ class MainWindow(QMainWindow):
         col = QVBoxLayout()
         col.setSpacing(10)
 
-        npu_title = section_title("fa5s.microchip", "Entrada da NPU")
-        sub = QLabel("28×28 · int8")
-        sub.setProperty("class", "Muted")
-        npu_title.addWidget(sub)
+        npu_title = section_title("fa5s.microchip", "Imagem enviada à FPGA")
+        self.npu_title_label = npu_title.itemAt(1).widget()
+        self.npu_sub_label = QLabel("28×28 int8")
+        self.npu_sub_label.setProperty("class", "Muted")
+        npu_title.addWidget(self.npu_sub_label)
         col.addLayout(npu_title)
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -542,9 +668,13 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.npu_view, 0, Qt.AlignCenter)
         row.addWidget(frame)
         pframe, play = panel()
-        cap = QLabel("PREDIÇÃO")
-        cap.setProperty("class", "SectionTitle")
-        cap.setAlignment(Qt.AlignCenter)
+        self.pred_caption = QLabel("RESPOSTA DA FPGA")
+        self.pred_caption.setProperty("class", "SectionTitle")
+        self.pred_caption.setAlignment(Qt.AlignCenter)
+        self.source_label = QLabel("")  # "calculado na NPU da FPGA · 12,4 ms"
+        self.source_label.setAlignment(Qt.AlignCenter)
+        self.source_label.setWordWrap(True)
+        self.source_label.setStyleSheet(f"color: {ORANGE}; font-size: 11px; font-weight: bold;")
         self.digit = QLabel("–")
         self.digit.setAlignment(Qt.AlignCenter)
         self.digit.setStyleSheet(f"color: {DIM}; font-size: 96px; font-weight: bold;")
@@ -552,14 +682,17 @@ class MainWindow(QMainWindow):
         self.conf.setAlignment(Qt.AlignCenter)
         self.conf.setProperty("class", "Muted")
         self.conf.setWordWrap(True)  # "confiança xx% · ao vivo" quebra a linha em vez de alargar a coluna
-        play.addWidget(cap)
+        play.addWidget(self.pred_caption)
         play.addWidget(self.digit, 1)
         play.addWidget(self.conf)
+        play.addWidget(self.source_label)
         row.addWidget(pframe, 1)
         col.addLayout(row)
 
         col.addSpacing(6)
-        col.addLayout(section_title("fa5s.chart-bar", "Confiança por classe"))
+        conf_title = section_title("fa5s.chart-bar", "Confiança (logits da FPGA)")
+        self.conf_title_label = conf_title.itemAt(1).widget()
+        col.addLayout(conf_title)
         bframe, blay = panel()
         self.bars = ConfidenceBars()
         blay.addWidget(self.bars)
@@ -658,6 +791,7 @@ class MainWindow(QMainWindow):
     def _on_snapshot(self, snap):
         self.last = snap
         self.video.set_snapshot(snap)
+        self.strip.set_state(snap.point is not None, snap.pen_down, snap.img28 is not None)
         if snap.version != self._version:
             self._version = snap.version
             self.npu_view.set_image(snap.img28)
@@ -694,6 +828,8 @@ class MainWindow(QMainWindow):
 
     def _on_inference(self, pred, latency_ms, live=False):
         # Ao vivo (durante o desenho) em teal; resultado final (ao parar) em verde
+        self.strip.pulse(pred.digit, latency_ms)
+        self.source_label.setText(f"calculado {self._hw_where} · {latency_ms:.1f} ms")
         self.digit.setText(str(pred.digit))
         self.digit.setStyleSheet(f"color: {TEAL if live else GREEN}; font-size: 96px; font-weight: bold;")
         self.conf.setText(f"confiança {pred.probs[pred.digit]:.1f}%" + ("\nao vivo" if live else ""))
@@ -710,6 +846,7 @@ class MainWindow(QMainWindow):
             self.log(f"[final] TX 0xFF + 784 B → RX 10 B  [{logits}]  →  {pred.digit}   ({latency_ms:.1f} ms)", "tx")
 
     def _reset_prediction(self):
+        self.source_label.setText("")
         self.digit.setText("–")
         self.digit.setStyleSheet(f"color: {DIM}; font-size: 96px; font-weight: bold;")
         self.conf.setText("aguardando desenho")
@@ -723,6 +860,14 @@ class MainWindow(QMainWindow):
     def _on_backend_ready(self, backend):
         self._submit(setattr, self.engine, "backend", backend)
         is_fpga = backend.label.startswith("FPGA")
+        # Deixa explícito onde a inferência roda: na FPGA ou, com --sim, na emulação no computador
+        self._hw_where = "na NPU da FPGA" if is_fpga else "na NPU emulada (computador)"
+        self.strip.set_backend(is_fpga)
+        self.npu_title_label.setText("Imagem enviada à FPGA" if is_fpga else "Imagem enviada à NPU")
+        self.npu_sub_label.setText("28×28 int8" if is_fpga else "emulada · 28×28")
+        self.pred_caption.setText("RESPOSTA DA FPGA" if is_fpga else "RESPOSTA (EMULADA)")
+        self.conf_title_label.setText("Confiança (logits da FPGA)" if is_fpga else "Confiança (logits emulados)")
+        self.source_label.setStyleSheet(f"color: {ORANGE if is_fpga else MUSTARD}; font-size: 11px; font-weight: bold;")
         self._set_npu_status("NPU: ONLINE (FPGA)" if is_fpga else "NPU: SIMULAÇÃO LOCAL", GREEN if is_fpga else BLUE)
         self.log(f"NPU pronta: {backend.label}", "ok")
 
@@ -741,6 +886,7 @@ class MainWindow(QMainWindow):
         self.log(message, "error")
 
     def _animate(self):
+        self.strip.tick()
         self.npu_view.tick()
         self.bars.tick()
 
