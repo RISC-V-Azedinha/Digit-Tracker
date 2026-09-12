@@ -1,6 +1,6 @@
 # Eureka: dígitos desenhados no ar, reconhecidos pela NPU na FPGA
 
-Protótipo derivado do experimento 7 do [GUI-TCC](../GUI-TCC). Em vez de desenhar com o mouse, você desenha um dígito **no ar** com o dedo indicador (ou com um bastão colorido). A câmera rastreia o movimento e o traço aparece sobre a imagem. O computador converte esse traço em uma imagem 28×28 e a envia à **NPU do SoC RISC-V na FPGA**, que faz a inferência da CNN e devolve a previsão.
+Protótipo derivado do experimento 7 do [GUI-TCC](https://github.com/RISC-V-Azedinha/GUI-TCC). Em vez de desenhar com o mouse, você desenha um dígito **no ar** com o dedo indicador (ou com um bastão colorido). A câmera rastreia o movimento e o traço aparece sobre a imagem. O computador converte esse traço em uma imagem 28×28 e a envia à **NPU do SoC RISC-V na FPGA**, que faz a inferência da CNN e devolve a previsão.
 
 ```
 câmera (até 1280x720) → mão (MediaPipe) ou cor (HSV) → traços → recorte + 20x20 + centralização em 28x28 → int8
@@ -9,7 +9,7 @@ câmera (até 1280x720) → mão (MediaPipe) ou cor (HSV) → traços → recort
 
 Para o funcionamento interno em detalhes (threads, rastreio, pré-processamento, protocolo serial e desempenho), veja [`FUNCIONAMENTO.md`](FUNCIONAMENTO.md).
 
-A placa usa o mesmo firmware (`GUI-TCC/artifacts/cnn_server.bin`), o mesmo protocolo serial e os mesmos pesos int8 do experimento 7. Por padrão, a inferência roda **na FPGA**. Com `--sim`, a NPU é emulada no computador com a mesma aritmética inteira, para testar sem a placa.
+A placa usa o mesmo firmware, o mesmo protocolo serial e os mesmos pesos int8 do experimento 7. O firmware (`firmware/cnn_server.bin`), os pesos (`weights.npz`) e os modelos (`models/`) vêm neste repositório, então o Eureka não depende da pasta do GUI-TCC. Por padrão, a inferência roda **na FPGA**. Com `--sim`, a NPU é emulada no computador com a mesma aritmética inteira, para testar sem a placa.
 
 ## Gestos
 
@@ -42,6 +42,23 @@ captura da câmera ──(só o quadro mais recente)──> processamento ──
 
 A telemetria mostra o fps e o tempo de processamento por quadro.
 
+## Windows (executável)
+
+Cada versão publicada traz o `Eureka-windows-x64.zip` na página de [Releases](https://github.com/RISC-V-Azedinha/Digit-Tracker/releases). Não é preciso instalar o Python. Basta extrair o zip e abrir:
+
+- `Eureka.exe`: inferência na FPGA, com a porta detectada automaticamente;
+- `Eureka-sim.bat`: sem placa, com a NPU emulada (o mesmo que `--sim`).
+
+As outras opções da seção [Uso](#uso) também valem para o `.exe`, por exemplo num atalho ou no terminal: `Eureka.exe --port COM4`. A calibração de cor (`calibration.json`) é salva ao lado do `.exe`.
+
+O executável é gerado pelo GitHub Actions (`.github/workflows/release.yml`), com o PyInstaller (`Eureka.spec`). Antes de publicar, o workflow abre o `.exe` com `--selftest`: esse modo carrega o MediaPipe, faz uma inferência na NPU emulada, abre a janela e fecha. Para publicar uma versão:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+Rodar o workflow manualmente (aba Actions → *Run workflow*) só gera o zip como artifact da execução, sem criar uma release.
+
 ## Instalação
 
 ```bash
@@ -53,14 +70,25 @@ pip install --no-deps mediapipe==1.0.1
 
 O MediaPipe é instalado com `--no-deps` de propósito. Ele declara como dependências o `opencv-contrib-python`, que traz plugins Qt próprios e quebra o PyQt5, e o `sounddevice`, que não é usado. As dependências de que ele realmente precisa já estão no `requirements.txt`. Pelo mesmo motivo, o OpenCV instalado é o `opencv-python-headless`.
 
-O modelo de rastreio da mão (`models/hand_landmarker.task`, 7,8 MB) já vem na pasta. Sem ele, ou sem o MediaPipe, o Eureka avisa no terminal e usa o rastreio por cor.
+O modelo de rastreio da mão (`models/hand_landmarker.task`, 7,8 MB) já vem na pasta. Sem ele, ou sem o MediaPipe, o Eureka avisa no log e usa o rastreio por cor.
 
 ### Pesos da NPU (`weights.npz`)
 
-O arquivo `weights.npz` já vem gerado. Para regenerá-lo, por exemplo depois de treinar a rede de novo no GUI-TCC, rode o script abaixo com o ambiente do GUI-TCC, que tem torch:
+O arquivo `weights.npz` já vem gerado. Para regenerá-lo a partir da rede pré-treinada (`models/cnn_pretrained.pth`), por exemplo depois de treinar a rede de novo no GUI-TCC e copiar o `.pth` para cá, rode o script abaixo. Ele precisa do torch, que o Eureka em si não usa, e baixa o MNIST em `data/` para a calibração int8:
 
 ```bash
-../GUI-TCC/.venv/bin/python export_weights.py
+pip install torch torchvision
+python export_weights.py
+```
+
+### Executável local
+
+Para gerar o executável na própria máquina, como o workflow faz (o resultado fica em `dist/Eureka/`):
+
+```bash
+pip install -r requirements-windows.txt
+pip install --no-deps mediapipe==1.0.1
+pyinstaller Eureka.spec --noconfirm --workpath build/pyinstaller --distpath dist
 ```
 
 ## Uso
@@ -102,12 +130,18 @@ Os botões do cabeçalho (Limpar, Inferir, Entrada, Calibrar cor, Tela cheia) fa
 
 | Arquivo | Conteúdo |
 |---|---|
-| `eureka.py` | ponto de entrada: argumentos, escolha da NPU (FPGA ou emulada) e abertura da janela |
+| `eureka.py` | ponto de entrada: argumentos, escolha da NPU (FPGA ou emulada), abertura da janela e `--selftest` |
+| `paths.py` | caminhos dos arquivos no código-fonte e no executável |
 | `gui.py` | interface PyQt5 (estilo do GUI-TCC): vídeo com o traço, entrada 28×28, predição, confiança, telemetria e log |
 | `pipeline.py` | threads de captura e de processamento; a interface recebe um `Snapshot` pronto por quadro |
 | `engine.py` | núcleo sem interface: processa cada quadro, controla a caneta e os gestos, dispara a inferência |
 | `hand.py` | rastreio da mão com o MediaPipe (`HandTracker`): gestos por dedos levantados e filtro One Euro |
 | `vision.py` | rastreio por cor (`MarkerTracker`), traços (`StrokeCanvas`) e pré-processamento 28×28 (`to_npu_input`) |
 | `npu.py` | `FpgaNpu` (placa, protocolo do `core/npu_driver.py`) e `CpuNpu` (emulação) |
-| `export_weights.py` | gera `weights.npz` a partir do modelo do GUI-TCC |
+| `export_weights.py` | gera `weights.npz` a partir de `models/cnn_pretrained.pth` (calibração int8 do GUI-TCC) |
+| `weights.npz` | pesos int8 da NPU |
+| `firmware/cnn_server.bin` | firmware do servidor CNN do SoC RISC-V (cópia do `artifacts/cnn_server.bin` do GUI-TCC) |
 | `models/hand_landmarker.task` | modelo do MediaPipe para detectar a mão |
+| `models/cnn_pretrained.pth` | rede em ponto flutuante do experimento 7, usada só pelo `export_weights.py` |
+| `Eureka.spec`, `requirements-windows.txt` | build do executável com o PyInstaller |
+| `.github/workflows/release.yml` | gera o `.exe` para Windows e publica a release a cada tag `v*` |

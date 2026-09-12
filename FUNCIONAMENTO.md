@@ -176,7 +176,7 @@ entrada 28×28×1 (int8)
   → Fully Connected 676 → 10                        → 10 logits (int8)
 ```
 
-Os pesos em ponto flutuante (`GUI-TCC/artifacts/cnn_pretrained.pth`) são quantizados para int8 com a mesma calibração do GUI-TCC, pela função `carregar_ou_treinar`. O script `export_weights.py` roda essa calibração uma vez com o ambiente do GUI-TCC e salva o resultado em `weights.npz`:
+Os pesos em ponto flutuante (`models/cnn_pretrained.pth`, cópia do `artifacts/cnn_pretrained.pth` do GUI-TCC) são quantizados para int8 com a mesma calibração da função `carregar_ou_treinar` do GUI-TCC. O script `export_weights.py` reproduz essa calibração, com um lote de 32 imagens do MNIST, e salva o resultado em `weights.npz`:
 - `w_conv`: 4×9, int8;
 - `b_conv`: 4, int32;
 - `w_fc`: 10×676, int8;
@@ -309,7 +309,7 @@ Numa máquina mais lenta que a de teste, um quadro pode ser pulado de vez em qua
 | `--input` | `mao` | `mao` (dedo) ou `cor` (bastão) |
 | `--model` | `models/hand_landmarker.task` | modelo do MediaPipe |
 | `--weights` | `weights.npz` | pesos int8 da NPU |
-| `--firmware` | `../GUI-TCC/artifacts/cnn_server.bin` | firmware do servidor CNN |
+| `--firmware` | `firmware/cnn_server.bin` | firmware do servidor CNN |
 | `--idle` | 0,8 s | tempo parado até a inferência final |
 | `--live-interval` | 0,2 s | intervalo da inferência ao vivo (0 desliga) |
 | `--fullscreen` | desligado | abre em tela cheia |
@@ -317,21 +317,25 @@ Numa máquina mais lenta que a de teste, um quadro pode ser pulado de vez em qua
 
 Arquivos de dados:
 - `weights.npz`: pesos da NPU;
+- `firmware/cnn_server.bin`: firmware enviado à FPGA no boot;
 - `models/hand_landmarker.task`: modelo da mão;
 - `calibration.json`: faixa de cor e modo do rastreio por cor. É criado ao calibrar e fica fora do git.
+
+Os caminhos vêm de `paths.py`. Os arquivos distribuídos (pesos, firmware, modelo) são lidos da pasta do código ou, no executável do PyInstaller, da pasta do pacote (`_internal`). O `calibration.json` é gravado na pasta do código ou ao lado do `.exe`.
 
 ## 12. Mapa do código
 
 | Arquivo | Principais elementos |
 |---|---|
-| `eureka.py` | `main()`: argumentos, escolha do backend, criação do rastreador da mão, abertura da janela |
+| `eureka.py` | `main()`: argumentos, escolha do backend, criação do rastreador da mão, abertura da janela, `--selftest` |
+| `paths.py` | `resource_path` (arquivos distribuídos), `user_path` (arquivos gravados) |
 | `pipeline.py` | `CaptureThread`, `ProcessingThread`, `Snapshot` |
 | `engine.py` | `Engine` (processamento de quadros, caneta, gestos, inferência), `softmax_pct`, `find_fpga_port` |
 | `hand.py` | `HandTracker` (MediaPipe, gestos), `OneEuroFilter`, `bend_degrees` |
 | `vision.py` | `MarkerTracker` (cor), `StrokeCanvas` (traços), `to_npu_input` (28×28) |
 | `npu.py` | `FpgaNpu` (protocolo serial), `CpuNpu` (emulação), `pack_weights_dma`, `load_weights` |
 | `gui.py` | `MainWindow`, `VideoView`, `NpuInputView`, `ConfidenceBars`, `CalibrationPanel`, `BackendThread` |
-| `export_weights.py` | gera `weights.npz` a partir do GUI-TCC |
+| `export_weights.py` | `calibrate`: gera `weights.npz` a partir de `models/cnn_pretrained.pth` |
 
 ## 13. Limitações conhecidas
 
