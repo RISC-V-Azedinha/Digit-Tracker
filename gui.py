@@ -9,10 +9,10 @@ import time
 import numpy as np
 import qtawesome as qta
 from PyQt5.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
+from PyQt5.QtGui import QColor, QImage, QKeySequence, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-                             QLabel, QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
-                             QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                             QLabel, QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QShortcut,
+                             QSizePolicy, QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from hand import HAND_CONNECTIONS
 from pipeline import CaptureThread, ProcessingThread
@@ -230,6 +230,16 @@ class VideoView(QWidget):
             p.setPen(QColor(TEXT))
             p.drawText(QPointF(c.x() + 16, c.y() + 5), state)
 
+        if not s.pen_enabled:
+            # Aviso de pausa no topo do vídeo
+            text = "DESENHO PAUSADO  ·  [ESPAÇO] retoma"
+            width = p.fontMetrics().horizontalAdvance(text) + 32
+            box = QRectF(rect.center().x() - width / 2, rect.top() + 14, width, 30)
+            p.setPen(QPen(QColor(MUSTARD), 1))
+            p.setBrush(QColor(11, 13, 18, 225))
+            p.drawRoundedRect(box, 4, 4)
+            p.drawText(box, Qt.AlignCenter, text)
+
 
 class NpuInputView(QWidget):
     """A imagem 28x28 como a NPU recebe; a borda acende a cada inferência."""
@@ -402,6 +412,7 @@ class MainWindow(QMainWindow):
 
         self.calibration = CalibrationPanel(self.video)
         self.calibration.hide()
+        self._install_shortcuts()
 
         # Pipeline: câmera -> processamento -> interface
         self.source = source
@@ -458,6 +469,8 @@ class MainWindow(QMainWindow):
         self.npu_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         row.addWidget(self.npu_status, 1)
 
+        self.btn_pause = button("Pausar", "fa5s.pause", "GhostBtn", MUTED)
+        self.btn_pause.clicked.connect(self.toggle_pause)
         self.btn_clear = button("Limpar", "fa5s.eraser", "GhostBtn", MUTED)
         self.btn_infer = button("Inferir", "fa5s.bolt", "GhostBtn", MUTED)
         self.btn_input = button("Entrada", "fa5s.hand-pointer", "GhostBtn", MUTED)
@@ -468,7 +481,7 @@ class MainWindow(QMainWindow):
         self.btn_input.clicked.connect(lambda: self._submit(self.worker.cycle_input) if self.worker else None)
         self.btn_calib.clicked.connect(self.toggle_calibration)
         self.btn_full.clicked.connect(self.toggle_fullscreen)
-        for b in (self.btn_clear, self.btn_infer, self.btn_input, self.btn_calib, self.btn_full):
+        for b in (self.btn_pause, self.btn_clear, self.btn_infer, self.btn_input, self.btn_calib, self.btn_full):
             row.addWidget(b)
         return header
 
@@ -499,7 +512,7 @@ class MainWindow(QMainWindow):
         left.addWidget(frame, 1)
 
         hints = QLabel("indicador: desenha  ·  indicador + médio: move sem riscar  ·  punho (0,8 s): limpa  ·  "
-                       "[L] ao vivo  [T] mão/cor  [M] máscara  [F11] tela cheia")
+                       "[ESPAÇO] pausa  [L] ao vivo  [T] mão/cor  [M] máscara  [F11] tela cheia")
         hints.setProperty("class", "Muted")
         hints.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         left.addWidget(hints)
@@ -616,26 +629,30 @@ class MainWindow(QMainWindow):
     def toggle_fullscreen(self):
         self.showNormal() if self.isFullScreen() else self.showFullScreen()
 
-    def keyPressEvent(self, event):
-        key = event.key()
-        if key in (Qt.Key_Q, Qt.Key_Escape):
-            self.close()
-        elif key == Qt.Key_Space:
-            self._submit(self._toggle_pen)
-        elif key == Qt.Key_R:
-            self.clear()
-        elif key == Qt.Key_I:
-            self._submit(self.engine.infer)
-        elif key == Qt.Key_T and self.worker:
-            self._submit(self.worker.cycle_input)
-        elif key == Qt.Key_L and self.worker:
-            self._submit(self.worker.toggle_live)
-        elif key == Qt.Key_M and self.worker:
+    def toggle_pause(self):
+        """Pausa ou retoma o desenho (a caneta não risca enquanto pausada)."""
+        self._submit(self._toggle_pen)
+
+    def toggle_mask(self):
+        if self.worker:
             self.worker.show_mask = not self.worker.show_mask
-        elif key == Qt.Key_C:
-            self.toggle_calibration()
-        elif key == Qt.Key_F11:
-            self.toggle_fullscreen()
+
+    def _install_shortcuts(self):
+        """Atalhos que valem com o foco em qualquer parte da janela, inclusive no log e na tabela."""
+        actions = {
+            "Space": self.toggle_pause,
+            "R": self.clear,
+            "I": lambda: self._submit(self.engine.infer),
+            "T": lambda: self._submit(self.worker.cycle_input) if self.worker else None,
+            "L": lambda: self._submit(self.worker.toggle_live) if self.worker else None,
+            "M": self.toggle_mask,
+            "C": self.toggle_calibration,
+            "F11": self.toggle_fullscreen,
+            "Q": self.close,
+            "Esc": self.close,
+        }
+        for keys, action in actions.items():
+            QShortcut(QKeySequence(keys), self).activated.connect(action)
 
     # ---------------- eventos
     def _on_snapshot(self, snap):
@@ -647,12 +664,18 @@ class MainWindow(QMainWindow):
             if not snap.strokes:
                 self._reset_prediction()
         mode_state = (snap.input_label, snap.pen_enabled, snap.live)
-        if mode_state != getattr(self, "_mode_state", None):
+        previous = getattr(self, "_mode_state", None)
+        if mode_state != previous:
             self._mode_state = mode_state
-            pen = "" if snap.pen_enabled else "  ·  CANETA PAUSADA"
+            pen = "" if snap.pen_enabled else "  ·  PAUSADO"
             live = "  ·  AO VIVO" if snap.live else ""
             self.mode_label.setText(f"ENTRADA: {snap.input_label}{live}{pen}")
             self.btn_input.setText(f" Entrada: {'Mão' if snap.input_label.startswith('MÃO') else 'Cor'}")
+            paused = not snap.pen_enabled
+            self.btn_pause.setText(" Retomar" if paused else " Pausar")
+            self.btn_pause.setIcon(qta.icon("fa5s.play" if paused else "fa5s.pause", color=MUSTARD if paused else MUTED))
+            if previous is not None and previous[1] != snap.pen_enabled:
+                self.log("Desenho pausado ([ESPAÇO] retoma)" if paused else "Desenho retomado", "warn" if paused else "info")
         if (snap.gesture, snap.fingers) != self._fingers:
             self._fingers = (snap.gesture, snap.fingers)
             if snap.fingers is None:
