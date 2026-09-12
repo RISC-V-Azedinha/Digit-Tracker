@@ -296,7 +296,7 @@ class ConfidenceBars(QWidget):
 
     def tick(self):
         if np.abs(self.target - self.shown).max() > 0.05:
-            self.shown += (self.target - self.shown) * 0.3
+            self.shown += (self.target - self.shown) * 0.6  # chega ao valor novo em ~165 ms, antes da próxima inferência ao vivo
             self.update()
 
     def paintEvent(self, event):
@@ -482,7 +482,9 @@ class MainWindow(QMainWindow):
         # Gesto reconhecido e estado de cada dedo (I = indicador, M = médio, A = anelar, m = mínimo)
         self.finger_label = QLabel("")
         self.finger_label.setStyleSheet("padding-left: 16px;")
-        top.insertWidget(3, self.finger_label)
+        # Ocupa a sobra da linha e corta o texto se faltar espaço, em vez de alargar a janela
+        self.finger_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        top.insertWidget(3, self.finger_label, 1)
         self._fingers = None
         self.cam_label = QLabel("")
         self.cam_label.setProperty("class", "Muted")
@@ -497,7 +499,7 @@ class MainWindow(QMainWindow):
         left.addWidget(frame, 1)
 
         hints = QLabel("indicador: desenha  ·  indicador + médio: move sem riscar  ·  punho (0,8 s): limpa  ·  "
-                       "[T] mão/cor  [M] máscara  [F11] tela cheia")
+                       "[L] ao vivo  [T] mão/cor  [M] máscara  [F11] tela cheia")
         hints.setProperty("class", "Muted")
         hints.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         left.addWidget(hints)
@@ -536,6 +538,7 @@ class MainWindow(QMainWindow):
         self.conf = QLabel("aguardando desenho")
         self.conf.setAlignment(Qt.AlignCenter)
         self.conf.setProperty("class", "Muted")
+        self.conf.setWordWrap(True)  # "confiança xx% · ao vivo" quebra a linha em vez de alargar a coluna
         play.addWidget(cap)
         play.addWidget(self.digit, 1)
         play.addWidget(self.conf)
@@ -625,6 +628,8 @@ class MainWindow(QMainWindow):
             self._submit(self.engine.infer)
         elif key == Qt.Key_T and self.worker:
             self._submit(self.worker.cycle_input)
+        elif key == Qt.Key_L and self.worker:
+            self._submit(self.worker.toggle_live)
         elif key == Qt.Key_M and self.worker:
             self.worker.show_mask = not self.worker.show_mask
         elif key == Qt.Key_C:
@@ -641,10 +646,12 @@ class MainWindow(QMainWindow):
             self.npu_view.set_image(snap.img28)
             if not snap.strokes:
                 self._reset_prediction()
-        if snap.input_label != self._input_label or snap.pen_enabled != self._pen_enabled:
-            self._input_label, self._pen_enabled = snap.input_label, snap.pen_enabled
+        mode_state = (snap.input_label, snap.pen_enabled, snap.live)
+        if mode_state != getattr(self, "_mode_state", None):
+            self._mode_state = mode_state
             pen = "" if snap.pen_enabled else "  ·  CANETA PAUSADA"
-            self.mode_label.setText(f"ENTRADA: {snap.input_label}{pen}")
+            live = "  ·  AO VIVO" if snap.live else ""
+            self.mode_label.setText(f"ENTRADA: {snap.input_label}{live}{pen}")
             self.btn_input.setText(f" Entrada: {'Mão' if snap.input_label.startswith('MÃO') else 'Cor'}")
         if (snap.gesture, snap.fingers) != self._fingers:
             self._fingers = (snap.gesture, snap.fingers)
@@ -662,14 +669,22 @@ class MainWindow(QMainWindow):
         self._last_error = snap.error
         self.worker.pending = False
 
-    def _on_inference(self, pred, latency_ms):
+    def _on_inference(self, pred, latency_ms, live=False):
+        # Ao vivo (durante o desenho) em teal; resultado final (ao parar) em verde
         self.digit.setText(str(pred.digit))
-        self.digit.setStyleSheet(f"color: {GREEN}; font-size: 96px; font-weight: bold;")
-        self.conf.setText(f"confiança {pred.probs[pred.digit]:.1f}%")
+        self.digit.setStyleSheet(f"color: {TEAL if live else GREEN}; font-size: 96px; font-weight: bold;")
+        self.conf.setText(f"confiança {pred.probs[pred.digit]:.1f}%" + ("\nao vivo" if live else ""))
         self.bars.set_values(pred.probs, pred.logits)
         self.npu_view.pulse()
-        logits = " ".join(f"{int(v):+d}" for v in pred.logits)
-        self.log(f"TX 0xFF + 784 B → RX 10 B  [{logits}]  →  {pred.digit}   ({latency_ms:.1f} ms)", "tx")
+        if live:
+            # Registra só quando o palpite muda, para o log não encher durante o desenho
+            if pred.digit != getattr(self, "_live_digit", None):
+                self._live_digit = pred.digit
+                self.log(f"[ao vivo] → {pred.digit}  ({pred.probs[pred.digit]:.0f}%, {latency_ms:.1f} ms)", "info")
+        else:
+            self._live_digit = None
+            logits = " ".join(f"{int(v):+d}" for v in pred.logits)
+            self.log(f"[final] TX 0xFF + 784 B → RX 10 B  [{logits}]  →  {pred.digit}   ({latency_ms:.1f} ms)", "tx")
 
     def _reset_prediction(self):
         self.digit.setText("–")

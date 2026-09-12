@@ -40,7 +40,12 @@ def find_fpga_port():
 class Engine:
     """Processa cada quadro da câmera e dispara a inferência quando o desenho para."""
 
-    def __init__(self, tracker, idle_s=0.8, calibration_path=None, hand_tracker=None):
+    def __init__(self, tracker, idle_s=0.8, calibration_path=None, hand_tracker=None, live_interval=0.2):
+        # Inferência ao vivo, como a lousa do experimento 7: enquanto o desenho muda, uma a cada
+        # live_interval segundos (0 desliga). Ao parar de desenhar, sempre há uma inferência final.
+        self.live_interval = live_interval
+        self._last_live = float("-inf")
+        self.final_version = -1
         self.tracker = tracker    # rastreio por cor (bastão)
         self.hand = hand_tracker  # rastreio da mão (MediaPipe), se disponível
         self.input_mode = "mão" if hand_tracker else "cor"
@@ -54,7 +59,7 @@ class Engine:
         self.idle_s = idle_s  # tempo parado até disparar a inferência
         self.calibration_path = calibration_path
         self.backend = None   # definido quando a NPU (FPGA ou emulada) fica pronta
-        self.on_inference = None  # callback(Prediction, latência em ms)
+        self.on_inference = None  # callback(Prediction, latência em ms, ao vivo?)
         self.pen_enabled = True
         self.size = None
         self.canvas = None
@@ -86,7 +91,7 @@ class Engine:
         self.frame = frame
 
         if self.input_mode == "mão":
-            # Pinça fechada = caneta abaixada; soltar a pinça levanta a caneta na hora
+            # Só o indicador levantado = caneta abaixada; indicador + médio levanta a caneta na hora
             self.point, touching = self.hand.detect(frame, now)
             self.mask, self.landmarks = None, self.hand.landmarks
             self._update_clear_gesture(now)
@@ -109,11 +114,16 @@ class Engine:
             self.npu_input, self.img28 = converted if converted else (None, None)
             self.preview_version = self.canvas.version
 
-        idle = now - self.canvas.last_change >= self.idle_s
-        if self.npu_input is not None and self.canvas.version != self.inferred_version and idle:
+        if self.npu_input is None:
+            return
+        if (self.live_interval and self.pen_down and self.canvas.version != self.inferred_version
+                and now - self._last_live >= self.live_interval):
+            self._last_live = now
+            self.infer(live=True)
+        elif now - self.canvas.last_change >= self.idle_s and self.canvas.version != self.final_version:
             self.infer()
 
-    def infer(self):
+    def infer(self, live=False):
         if self.backend is None or self.npu_input is None:
             return
         try:
@@ -126,10 +136,12 @@ class Engine:
             self.bytes_rx += UART_RX_BYTES
             self.error = ""
             if self.on_inference:
-                self.on_inference(self.prediction, self.latency_ms)
+                self.on_inference(self.prediction, self.latency_ms, live)
         except Exception as e:  # erro de comunicação não deve derrubar a interface
             self.error = str(e)
         self.inferred_version = self.canvas.version
+        if not live:
+            self.final_version = self.canvas.version
 
     def _update_clear_gesture(self, now):
         """Punho fechado por CLEAR_HOLD_S limpa o desenho (uma vez; para repetir, abra a mão)."""

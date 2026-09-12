@@ -18,7 +18,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 Snapshot = namedtuple("Snapshot", (
     "frame mask size strokes point pen_down pen_enabled landmarks palm clear_progress roi img28 version "
-    "input_label gesture fingers error backend_label latency_ms inferences bytes_tx bytes_rx proc_ms fps"))
+    "input_label gesture fingers live error backend_label latency_ms inferences bytes_tx bytes_rx proc_ms fps"))
 
 
 class CaptureThread(QThread):
@@ -74,7 +74,7 @@ class CaptureThread(QThread):
 class ProcessingThread(QThread):
     """Roda o Engine fora da interface e entrega um Snapshot por quadro."""
     snapshot = pyqtSignal(object)
-    inference = pyqtSignal(object, float)
+    inference = pyqtSignal(object, float, bool)  # (predição, latência em ms, ao vivo?)
     cleared = pyqtSignal()
     message = pyqtSignal(str, str)  # (texto, tipo: info | ok | warn | error)
     hsv_changed = pyqtSignal(object, object)
@@ -90,7 +90,8 @@ class ProcessingThread(QThread):
         self._seq = 0
         self._fps = 0.0
         self._last_t = None
-        engine.on_inference = lambda pred, ms: self.inference.emit(pred, ms)
+        self.live_default = engine.live_interval or 0.2
+        engine.on_inference = lambda pred, ms, live: self.inference.emit(pred, ms, live)
         engine.on_gesture_clear = self.cleared.emit
 
     def submit(self, fn, *args):
@@ -136,6 +137,7 @@ class ProcessingThread(QThread):
         return Snapshot(
             gesture=hand.gesture if hand else None,
             fingers=tuple(hand.extended.values()) if hand and hand.landmarks else None,
+            live=bool(e.live_interval),
             frame=e.frame, mask=e.mask if self.show_mask else None, size=e.size,
             strokes=[list(s) for s in e.canvas.strokes], point=e.point, pen_down=e.pen_down,
             pen_enabled=e.pen_enabled, landmarks=list(e.landmarks) if e.landmarks else None,
@@ -150,6 +152,11 @@ class ProcessingThread(QThread):
         if self.engine.input_mode == "cor" and self.engine.calibration_path:
             self.engine.tracker.save(self.engine.calibration_path)
         self.message.emit(f"Entrada: {label}", "info")
+
+    def toggle_live(self):
+        e = self.engine
+        e.live_interval = 0.0 if e.live_interval else self.live_default
+        self.message.emit("Inferência ao vivo: " + ("ligada" if e.live_interval else "desligada"), "info")
 
     def calibrate(self, x, y):
         result = self.engine.calibrate_at(x, y)

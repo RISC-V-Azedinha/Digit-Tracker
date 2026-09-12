@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--model", default=os.path.join(HERE, "models", "hand_landmarker.task"),
                         help="modelo do MediaPipe para o rastreio da mão")
     parser.add_argument("--idle", type=float, default=0.8, help="segundos parado até inferir (padrão: 0.8)")
+    parser.add_argument("--live-interval", type=float, default=0.2,
+                        help="segundos entre inferências durante o desenho; 0 desliga (padrão: 0.2)")
     parser.add_argument("--fullscreen", action="store_true", help="abre em tela cheia (F11 alterna)")
     parser.add_argument("--scale", type=float, help="escala da interface (ex.: 1.5 em telas de alta resolução)")
     args = parser.parse_args()
@@ -78,7 +80,8 @@ def main():
     app.setStyle("Fusion")
 
     tracker = MarkerTracker.load(CALIBRATION_PATH) if os.path.exists(CALIBRATION_PATH) else MarkerTracker()
-    engine = Engine(tracker, idle_s=args.idle, calibration_path=CALIBRATION_PATH, hand_tracker=hand)
+    engine = Engine(tracker, idle_s=args.idle, calibration_path=CALIBRATION_PATH, hand_tracker=hand,
+                    live_interval=args.live_interval)
     window = MainWindow(engine, factory, label, link, camera_index=args.camera)
     window.show_initial(args.fullscreen)
     sys.exit(app.exec_())
