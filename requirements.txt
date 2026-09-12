@@ -1,0 +1,12 @@
+numpy>=1.24
+opencv-python-headless>=4.8   # sem os plugins Qt do OpenCV, que conflitam com o PyQt5
+pyserial>=3.5
+PyQt5>=5.15
+QtAwesome>=1.3                # ícones flat (os mesmos do GUI-TCC)
+
+# Dependências do MediaPipe (rastreio da mão). O MediaPipe em si é instalado à parte, com
+# --no-deps, porque ele declara o opencv-contrib-python (plugins Qt conflitantes); veja o README.
+absl-py~=2.3
+flatbuffers~=25.9
+certifi
+matplotlib
