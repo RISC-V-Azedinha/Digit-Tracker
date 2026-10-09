@@ -7,7 +7,7 @@ câmera (até 1280x720) → mão (MediaPipe) ou cor (HSV) → traços → recort
       → UART (921600 baud) → NPU: Conv2D 3x3 + ReLU → Fully Connected → 10 logits → previsão
 ```
 
-> ⚠️ O firmware (`firmware/cnn_server.bin`) usa os descritores de camada e os demais recursos da NPU do SoC RISC-V **v1.2.0 ou posterior**. Grave na FPGA o bitstream dessa versão ([releases do RISC-V](https://github.com/RISC-V-Azedinha/RISC-V/releases)); com um bitstream anterior, a inferência não responde.
+> ⚠️ O firmware (`firmware/cnn_server.bin`) usa os recursos da NPU e o GPIO (o dígito previsto aparece nos LEDs e nos displays de 7 segmentos) do SoC RISC-V **v1.3.0 ou posterior**. Grave na FPGA o bitstream dessa versão ([releases do RISC-V](https://github.com/RISC-V-Azedinha/RISC-V/releases)).
 
 Para o funcionamento interno em detalhes (threads, rastreio, pré-processamento, protocolo serial e desempenho), veja [`FUNCIONAMENTO.md`](FUNCIONAMENTO.md).
 
