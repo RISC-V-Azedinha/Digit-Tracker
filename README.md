@@ -7,6 +7,8 @@ câmera (até 1280x720) → mão (MediaPipe) ou cor (HSV) → traços → recort
       → UART (921600 baud) → NPU: Conv2D 3x3 + ReLU → Fully Connected → 10 logits → previsão
 ```
 
+> ⚠️ O firmware (`firmware/cnn_server.bin`) usa os descritores de camada e os demais recursos da NPU do SoC RISC-V **v1.2.0 ou posterior**. Grave na FPGA o bitstream dessa versão ([releases do RISC-V](https://github.com/RISC-V-Azedinha/RISC-V/releases)); com um bitstream anterior, a inferência não responde.
+
 Para o funcionamento interno em detalhes (threads, rastreio, pré-processamento, protocolo serial e desempenho), veja [`FUNCIONAMENTO.md`](FUNCIONAMENTO.md).
 
 A placa usa o mesmo firmware, o mesmo protocolo serial e os mesmos pesos int8 do experimento 7. O firmware (`firmware/cnn_server.bin`), os pesos (`weights.npz`) e os modelos (`models/`) vêm neste repositório, então o Eureka não depende da pasta do GUI-TCC. Por padrão, a inferência roda **na FPGA**. Com `--sim`, a NPU é emulada no computador com a mesma aritmética inteira, para testar sem a placa.
